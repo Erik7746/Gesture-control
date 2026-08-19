@@ -49,7 +49,6 @@ htmlcov/
 # Modelos de MediaPipe (si se descargan localmente)
 *.task
 *.tflite
-models/
 
 # Archivos de datos
 *.csv
