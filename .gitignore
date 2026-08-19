@@ -75,3 +75,6 @@ datasets/
 .DS_Store
 Thumbs.db
 desktop.ini
+.directory
+
+AGENTS.md
