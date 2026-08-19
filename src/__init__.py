@@ -1,1 +1,1 @@
-"""Paquete principal del sistema de reconocimiento de gestos."""
+"""GestureCam: reconocimiento geométrico de gestos de mano con una sola webcam."""
