@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Modelos de MediaPipe (si se descargan localmente)
+*.task
+*.tflite
+models/
+
+# Archivos de datos
+*.csv
+*.json
+data/
+datasets/
+
+# Archivos de video (si se usan para pruebas)
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Imágenes de prueba (opcional, depende de si quieres versionarlas)
+# *.jpg
+# *.jpeg
+# *.png
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
