@@ -17,7 +17,7 @@ class Camera:
         cap = cv2.VideoCapture(self._config.camera_index)
         if not cap.isOpened():
             cap.release()
-            raise CameraError(f"No se puede abrir la camara {self._config.camera_index}")
+            raise CameraError(f"No se pudo abrir la camara {self._config.camera_index}")
         
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.frame_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.frame_height)
