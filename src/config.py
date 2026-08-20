@@ -12,6 +12,8 @@ class Config:
     frame_height: int = 480
     mirror: bool = True
     target_fps: int = 30
+    inference_fps: int = 15
+    """FPS a los que se ejecutan los modelos de MediaPipe (inferencia)."""
     log_level: str = "INFO"
 
     # Modelos
@@ -35,6 +37,8 @@ class Config:
     """Tamaño mínimo del ROI en píxeles (ancho o alto)."""
     roi_max_size_ratio: float = 0.8
     """Máximo ratio del ROI respecto al frame (0.8 = 80% del frame)."""
+    roi_unify_max_ratio: float = 0.75
+    """Si un ROI unificado supera este ratio en ancho Y alto, usar frame completo."""
 
     # Tracking
     hand_lost_threshold: int = 5

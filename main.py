@@ -30,7 +30,8 @@ def setup_logging(level_name: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sistema de detección de manos a distancia")
     parser.add_argument("--camera", "-c", type=int, default=0, help="Índice de la cámara (default: 0)")
-    parser.add_argument("--fps", type=int, default=30, help="FPS objetivo (default: 30)")
+    parser.add_argument("--fps", type=int, default=30, help="FPS objetivo de captura/visualizacion (default: 30)")
+    parser.add_argument("--inference-fps", type=int, default=15, help="FPS de inferencia de MediaPipe (default: 15)")
     parser.add_argument("--width", type=int, default=640, help="Ancho del frame (default: 640)")
     parser.add_argument("--height", type=int, default=480, help="Alto del frame (default: 480)")
     parser.add_argument(
@@ -52,15 +53,19 @@ def main() -> int:
         frame_width=args.width,
         frame_height=args.height,
         target_fps=args.fps,
+        inference_fps=args.inference_fps,
         log_level=args.log_level,
     )
 
+    inference_interval = max(1, round(config.target_fps / config.inference_fps))
     logger.info(
-        "Iniciando | cámara=%s res=%sx%s fps=%s",
+        "Iniciando | cámara=%s res=%sx%s captura_fps=%s inferencia_fps=%s intervalo=%s",
         config.camera_index,
         config.frame_width,
         config.frame_height,
         config.target_fps,
+        config.inference_fps,
+        inference_interval,
     )
 
     fps_limiter = FPSLimiter(config.target_fps)
@@ -83,36 +88,44 @@ def main() -> int:
                     # Timestamp base para monotonicidad
                     start_time_ns = time.time_ns()
 
+                    frame_idx = 0
+                    last_roi: tuple[int, int, int, int] | None = None
                     while True:
                         fps_limiter.wait()
+                        frame_idx += 1
 
                         frame = camera.read()
                         if config.mirror:
                             frame = cv2.flip(frame, 1)
-
-                        # Preparar imagen RGB para MediaPipe
-                        rgb_full = bgr_to_rgb(frame)
-                        mp_image_full = create_mp_image(rgb_full)
 
                         # Timestamp monotónico en ms
                         timestamp_ms = (time.time_ns() - start_time_ns) // 1_000_000
                         if timestamp_ms <= 0:
                             timestamp_ms = 1
 
-                        # ── Pose detection (asíncrono, opcional) ─────────────
-                        if tracker.should_run_pose_detection():
-                            pose_detector.detect_async(mp_image_full, timestamp_ms)
+                        # ── Inferencia MediaPipe (solo cada inference_interval frames) ──
+                        should_infer = (frame_idx % inference_interval) == 0
 
-                        # ── Hand detection sobre ROI ─────────────────────────
-                        roi = tracker.get_roi_for_hand_detection(frame.shape)
-                        tracker.set_current_hand_roi(roi)
+                        if should_infer:
+                            rgb_full = bgr_to_rgb(frame)
+                            mp_image_full = create_mp_image(rgb_full)
 
-                        # Crop + resize del ROI
-                        roi_rgb = crop_roi(rgb_full, roi)
-                        roi_resized = resize_for_model(roi_rgb, config.hand_input_size)
-                        mp_image_roi = create_mp_image(roi_resized)
+                            # Pose detection (asíncrono, opcional)
+                            if tracker.should_run_pose_detection():
+                                pose_detector.detect_async(mp_image_full, timestamp_ms)
 
-                        hand_detector.detect_async(mp_image_roi, timestamp_ms)
+                            # Hand detection sobre ROI
+                            roi = tracker.get_roi_for_hand_detection(frame.shape)
+                            tracker.set_current_hand_roi(roi)
+                            last_roi = roi
+
+                            roi_rgb = crop_roi(rgb_full, roi)
+                            roi_resized = resize_for_model(roi_rgb, config.hand_input_size)
+                            mp_image_roi = create_mp_image(roi_resized)
+                            hand_detector.detect_async(mp_image_roi, timestamp_ms)
+                        else:
+                            # Reutilizar último ROI conocido para visualización
+                            roi = last_roi
 
                         # ── Visualización (estado conocido hasta ahora) ──────
                         fps_counter.tick()
@@ -120,7 +133,8 @@ def main() -> int:
 
                         display = visualizer.draw(
                             frame=frame.copy(),
-                            hand_state=tracker.hand_state,
+                            hand_left=tracker.hand_left,
+                            hand_right=tracker.hand_right,
                             pose_result=tracker.pose_result,
                             roi=roi,
                             tracker_state=tracker.state,

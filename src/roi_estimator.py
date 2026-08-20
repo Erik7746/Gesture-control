@@ -192,6 +192,39 @@ class ROIEstimator:
 
         return (x1, y1, x2, y2)
 
+    def unify_rois(
+        self,
+        rois: list[tuple[int, int, int, int]],
+        frame_shape: tuple[int, int],
+    ) -> tuple[int, int, int, int]:
+        """Devuelve un ROI que cubre todos los ROIs dados (bounding box unificado).
+
+        Añade un margen proporcional al tamaño para absorber movimientos.
+        """
+        if not rois:
+            return self.full_frame(frame_shape)
+
+        x1 = min(r[0] for r in rois)
+        y1 = min(r[1] for r in rois)
+        x2 = max(r[2] for r in rois)
+        y2 = max(r[3] for r in rois)
+
+        # Margen del 20% del tamaño del ROI unificado
+        margin_x = int((x2 - x1) * 0.2)
+        margin_y = int((y2 - y1) * 0.2)
+        x1 -= margin_x
+        y1 -= margin_y
+        x2 += margin_x
+        y2 += margin_y
+
+        frame_h, frame_w = frame_shape[:2]
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(frame_w, x2)
+        y2 = min(frame_h, y2)
+
+        return (x1, y1, x2, y2)
+
     def full_frame(self, frame_shape: tuple[int, int]) -> tuple[int, int, int, int]:
         """Devuelve ROI que cubre todo el frame."""
         frame_h, frame_w = frame_shape[:2]
