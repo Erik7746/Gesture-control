@@ -24,18 +24,6 @@ class Camera:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._config.frame_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._config.frame_height)
 
-        # Leer valores reales que el driver asignó
-        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        actual_fps = cap.get(cv2.CAP_PROP_FPS)
-        import logging
-        logging.getLogger(__name__).info(
-            "Camara abierta | res_real=%sx%s fps_real=%.1f fourcc=%s",
-            actual_w,
-            actual_h,
-            actual_fps,
-            int(cap.get(cv2.CAP_PROP_FOURCC)),
-        )
         self._cap = cap
 
     def read(self) -> np.ndarray:

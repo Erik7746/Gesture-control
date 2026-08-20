@@ -12,8 +12,6 @@ class Config:
     frame_height: int = 480
     mirror: bool = True
     target_fps: int = 30
-    inference_fps: int = 15
-    """FPS a los que se ejecutan los modelos de MediaPipe (inferencia)."""
     log_level: str = "INFO"
 
     # Modelos
