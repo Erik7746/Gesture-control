@@ -124,6 +124,7 @@ def main() -> int:
                             pose_result=tracker.pose_result,
                             roi=roi,
                             tracker_state=tracker.state,
+                            tracking_mode=tracker.tracking_mode,
                             fps=real_fps,
                         )
 

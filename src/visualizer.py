@@ -51,6 +51,7 @@ class Visualizer:
         pose_result: Optional[PoseLandmarkerResult],
         roi: Optional[tuple[int, int, int, int]],
         tracker_state: str,
+        tracking_mode: str,
         fps: float,
     ) -> np.ndarray:
         """Dibuja toda la información de debug/visualización sobre el frame."""
@@ -79,9 +80,10 @@ class Visualizer:
             state_color = (255, 255, 0)
 
         cv2.putText(frame, f"State: {tracker_state}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, state_color, 2)
-        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_TEXT, 2)
+        cv2.putText(frame, f"Mode: {tracking_mode}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_TEXT, 1)
+        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_TEXT, 2)
 
-        y_offset = 90
+        y_offset = 110
         for idx, hand in enumerate(hands[:2]):
             color = COLOR_HANDS[idx % len(COLOR_HANDS)]
             info = f"Hand {idx + 1}: conf={hand.confidence:.2f}"
