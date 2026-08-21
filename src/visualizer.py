@@ -14,8 +14,10 @@ logger = logging.getLogger(__name__)
 
 # Colores BGR
 COLOR_ROI = (0, 255, 255)           # Cyan
-COLOR_HAND_LEFT = (0, 255, 0)       # Verde
-COLOR_HAND_RIGHT = (0, 0, 255)      # Rojo
+COLOR_HANDS = [
+    (0, 255, 0),                    # Verde para la primera mano
+    (0, 165, 255),                  # Naranja para la segunda mano
+]
 COLOR_POSE = (255, 0, 0)            # Azul
 COLOR_TEXT = (0, 255, 0)            # Verde
 COLOR_TEXT_WARN = (0, 165, 255)     # Naranja
@@ -45,8 +47,7 @@ class Visualizer:
     def draw(
         self,
         frame: np.ndarray,
-        hand_left: Optional[HandState],
-        hand_right: Optional[HandState],
+        hands: list[HandState],
         pose_result: Optional[PoseLandmarkerResult],
         roi: Optional[tuple[int, int, int, int]],
         tracker_state: str,
@@ -66,10 +67,9 @@ class Visualizer:
             self._draw_pose_arms(frame, pose_result, w, h)
 
         # Manos
-        if hand_left is not None:
-            self._draw_hand(frame, hand_left, COLOR_HAND_LEFT)
-        if hand_right is not None:
-            self._draw_hand(frame, hand_right, COLOR_HAND_RIGHT)
+        for idx, hand in enumerate(hands[:2]):
+            color = COLOR_HANDS[idx % len(COLOR_HANDS)]
+            self._draw_hand(frame, hand, color)
 
         # HUD
         state_color = COLOR_TEXT
@@ -82,13 +82,11 @@ class Visualizer:
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_TEXT, 2)
 
         y_offset = 90
-        if hand_left is not None:
-            info = f"L: {hand_left.handedness} conf={hand_left.confidence:.2f}"
-            cv2.putText(frame, info, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_HAND_LEFT, 2)
+        for idx, hand in enumerate(hands[:2]):
+            color = COLOR_HANDS[idx % len(COLOR_HANDS)]
+            info = f"Hand {idx + 1}: conf={hand.confidence:.2f}"
+            cv2.putText(frame, info, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             y_offset += 25
-        if hand_right is not None:
-            info = f"R: {hand_right.handedness} conf={hand_right.confidence:.2f}"
-            cv2.putText(frame, info, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_HAND_RIGHT, 2)
 
         return frame
 

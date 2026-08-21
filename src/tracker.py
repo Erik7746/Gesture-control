@@ -16,15 +16,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class HandState:
     """Estado interno de una mano trackeada."""
+
     landmarks: list[tuple[float, float, float]]  # 21 landmarks en coords originales
-    handedness: str  # "Left" o "Right"
     confidence: float
     center: tuple[float, float]  # centro aproximado en píxeles
     size: float  # tamaño estimado en píxeles
 
 
 class Tracker:
-    """Máquina de estados para seguimiento de AMBAS manos con fallback a detección.
+    """Máquina de estados para seguimiento de hasta 2 manos con fallback a detección.
 
     Thread-safe: los callbacks de MediaPipe LIVE_STREAM actualizan
     resultados desde hilos internos; el bucle principal consulta el estado
@@ -39,8 +39,7 @@ class Tracker:
         # Estado
         self._state = "DETECTING"  # DETECTING | TRACKING | LOST
         self._pose_result: Optional[PoseLandmarkerResult] = None
-        self._hand_left: Optional[HandState] = None
-        self._hand_right: Optional[HandState] = None
+        self._hands: list[HandState] = []
 
         # Contadores
         self._frames_without_any_hand = 0
@@ -70,7 +69,8 @@ class Tracker:
     def on_hand_result(self, result: HandLandmarkerResult, *args) -> None:
         """Callback cuando llega un resultado de HandLandmarker.
 
-        Actualiza _hand_left y _hand_right según la handedness detectada.
+        Actualiza la lista interna de manos detectadas (máximo 2).
+        No se distingue entre mano derecha o izquierda.
         """
         with self._lock:
             roi = self._current_hand_roi
@@ -82,13 +82,12 @@ class Tracker:
             self._frames_without_any_hand = 0
             from .image_utils import transform_normalized_landmarks
 
-            any_tracked = False
-            for idx, lm_norm in enumerate(result.hand_landmarks):
-                # Handedness
-                handedness = "Unknown"
+            new_hands: list[HandState] = []
+            for lm_norm in result.hand_landmarks[:2]:  # máximo 2 manos
+                # Tomar la mayor confianza disponible entre las categorías de handedness
                 score = 0.0
+                idx = len(new_hands)
                 if result.handedness and idx < len(result.handedness):
-                    handedness = result.handedness[idx][0].category_name
                     score = result.handedness[idx][0].score
 
                 # Transformar a coords originales
@@ -98,46 +97,18 @@ class Tracker:
                 center = (sum(xs) / len(xs), sum(ys) / len(ys))
                 size = max(max(xs) - min(xs), max(ys) - min(ys))
 
-                hand = HandState(
-                    landmarks=lm_orig,
-                    handedness=handedness,
-                    confidence=score,
-                    center=center,
-                    size=size,
+                new_hands.append(
+                    HandState(
+                        landmarks=lm_orig,
+                        confidence=score,
+                        center=center,
+                        size=size,
+                    )
                 )
 
-                # Asignar según handedness (con fallback heurístico por posición x)
-                if handedness == "Left":
-                    self._hand_left = hand
-                    any_tracked = True
-                elif handedness == "Right":
-                    self._hand_right = hand
-                    any_tracked = True
-                else:
-                    # Desconocido: asignar al slot vacío, o por posición horizontal
-                    if self._hand_left is None and self._hand_right is None:
-                        self._hand_left = hand
-                    elif self._hand_left is None:
-                        self._hand_left = hand
-                    elif self._hand_right is None:
-                        self._hand_right = hand
-                    else:
-                        # Ambos ocupados: reemplazar el más cercano
-                        dl = abs(center[0] - self._hand_left.center[0]) if self._hand_left else float('inf')
-                        dr = abs(center[0] - self._hand_right.center[0]) if self._hand_right else float('inf')
-                        if dl < dr:
-                            self._hand_left = hand
-                        else:
-                            self._hand_right = hand
-                    any_tracked = True
-
-            if any_tracked:
-                self._state = "TRACKING"
-                logger.debug(
-                    "Manos detectadas | left=%s right=%s",
-                    self._hand_left.handedness if self._hand_left else None,
-                    self._hand_right.handedness if self._hand_right else None,
-                )
+            self._hands = new_hands
+            self._state = "TRACKING"
+            logger.debug("Manos detectadas: %d", len(self._hands))
 
     # ── Consultas desde el bucle principal ───────────────────────────────────
 
@@ -151,33 +122,22 @@ class Tracker:
                 if self._state == "TRACKING":
                     logger.info("Tracking perdido: %d frames sin ninguna mano", self._frames_without_any_hand)
                     self._state = "LOST"
-                    self._hand_left = None
-                    self._hand_right = None
+                    self._hands = []
 
             # Si tenemos al menos una mano trackeada → ROI unificado
-            if self._state == "TRACKING":
-                rois = []
-                if self._hand_left is not None:
-                    rois.append(self._roi_estimator.from_hand_position(
-                        self._hand_left.center,
-                        self._hand_left.size,
-                        frame_shape,
-                    ))
-                if self._hand_right is not None:
-                    rois.append(self._roi_estimator.from_hand_position(
-                        self._hand_right.center,
-                        self._hand_right.size,
-                        frame_shape,
-                    ))
-                if rois:
-                    unified = self._roi_estimator.unify_rois(rois, frame_shape)
-                    # Si el ROI unificado es casi todo el frame, mejor usar frame completo
-                    u_w = unified[2] - unified[0]
-                    u_h = unified[3] - unified[1]
-                    f_h, f_w = frame_shape[:2]
-                    if u_w >= f_w * self._config.roi_unify_max_ratio and u_h >= f_h * self._config.roi_unify_max_ratio:
-                        return self._roi_estimator.full_frame(frame_shape)
-                    return unified
+            if self._state == "TRACKING" and self._hands:
+                rois = [
+                    self._roi_estimator.from_hand_position(hand.center, hand.size, frame_shape)
+                    for hand in self._hands
+                ]
+                unified = self._roi_estimator.unify_rois(rois, frame_shape)
+                # Si el ROI unificado es casi todo el frame, mejor usar frame completo
+                u_w = unified[2] - unified[0]
+                u_h = unified[3] - unified[1]
+                f_h, f_w = frame_shape[:2]
+                if u_w >= f_w * self._config.roi_unify_max_ratio and u_h >= f_h * self._config.roi_unify_max_ratio:
+                    return self._roi_estimator.full_frame(frame_shape)
+                return unified
 
             # DETECTING / LOST: usar pose para estimar ROIs de ambos brazos
             if self._pose_result is not None and self._frames_without_pose < self._config.pose_lost_threshold:
@@ -212,14 +172,9 @@ class Tracker:
             return self._state
 
     @property
-    def hand_left(self) -> Optional[HandState]:
+    def hands(self) -> list[HandState]:
         with self._lock:
-            return self._hand_left
-
-    @property
-    def hand_right(self) -> Optional[HandState]:
-        with self._lock:
-            return self._hand_right
+            return self._hands.copy()
 
     @property
     def pose_result(self) -> Optional[PoseLandmarkerResult]:

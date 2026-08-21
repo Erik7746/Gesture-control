@@ -120,8 +120,7 @@ def main() -> int:
 
                         display = visualizer.draw(
                             frame=frame.copy(),
-                            hand_left=tracker.hand_left,
-                            hand_right=tracker.hand_right,
+                            hands=tracker.hands,
                             pose_result=tracker.pose_result,
                             roi=roi,
                             tracker_state=tracker.state,
