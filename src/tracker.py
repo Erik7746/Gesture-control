@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from dataclasses import dataclass
 from typing import Optional
@@ -21,6 +22,7 @@ class HandState:
     confidence: float
     center: tuple[float, float]  # centro aproximado en píxeles
     size: float  # tamaño estimado en píxeles
+    lost_frames: int = 0  # frames desde la última detección real
 
 
 class Tracker:
@@ -33,6 +35,10 @@ class Tracker:
     El modo wrists es el puente para encontrar las manos a distancia.
     Solo se pasa a hands cuando se detectan 2 manos; si se pierde alguna,
     se vuelve inmediatamente a wrists.
+
+    Incluye un mini-tracker por proximidad: si una mano no se detecta en
+    un frame, se mantiene en su última posición conocida hasta
+    hand_max_lost_frames, evitando parpadeo visual.
 
     Thread-safe: los callbacks de MediaPipe LIVE_STREAM actualizan
     resultados desde hilos internos; el bucle principal consulta el estado
@@ -80,20 +86,22 @@ class Tracker:
     def on_hand_result(self, result: HandLandmarkerResult, *args) -> None:
         """Callback cuando llega un resultado de HandLandmarker.
 
-        Actualiza la lista interna de manos detectadas (máximo 2) y
-        gestiona la transición entre modos wrists/hands.
+        Actualiza la lista interna de manos usando mini-tracking por proximidad.
         """
         with self._lock:
             roi = self._current_hand_roi
             if not result.hand_landmarks:
                 self._frames_without_any_hand += 1
+                # Incrementar edad de manos existentes
+                self._age_hands()
                 logger.debug("HandLandmarker no encontró manos en ROI %s", roi)
-                self._handle_mode_transition([])
+                self._handle_mode_transition()
                 return
 
             self._frames_without_any_hand = 0
             from .image_utils import transform_normalized_landmarks
 
+            # Convertir detecciones del frame actual a HandState
             new_hands: list[HandState] = []
             for idx, lm_norm in enumerate(result.hand_landmarks[:2]):  # máximo 2 manos
                 # Tomar la mayor confianza disponible entre las categorías de handedness
@@ -114,22 +122,97 @@ class Tracker:
                         confidence=score,
                         center=center,
                         size=size,
+                        lost_frames=0,
                     )
                 )
 
-            self._hands = new_hands
-            self._handle_mode_transition(new_hands)
+            # Emparejar nuevas detecciones con manos existentes por proximidad
+            self._merge_hands(new_hands)
+            self._handle_mode_transition()
 
-    def _handle_mode_transition(self, new_hands: list[HandState]) -> None:
+    def _age_hands(self) -> None:
+        """Incrementa lost_frames y descarta manos perdidas demasiado tiempo."""
+        for hand in self._hands:
+            hand.lost_frames += 1
+        self._hands = [
+            hand for hand in self._hands
+            if hand.lost_frames <= self._config.hand_max_lost_frames
+        ]
+
+    def _merge_hands(self, new_hands: list[HandState]) -> None:
+        """Empareja nuevas detecciones con manos trackeadas por proximidad.
+
+        Las manos no emparejadas se mantienen temporalmente (incrementando
+        lost_frames). Las nuevas detecciones no emparejadas se añaden.
+        El resultado se ordena por posición x para identidad visual estable.
+        """
+        if not self._hands:
+            self._hands = sorted(new_hands[:2], key=lambda h: h.center[0])
+            return
+
+        if not new_hands:
+            self._age_hands()
+            return
+
+        # Calcular todas las distancias entre manos existentes y nuevas
+        pairs: list[tuple[float, int, int]] = []
+        for i, existing in enumerate(self._hands):
+            for j, new in enumerate(new_hands):
+                dist = math.hypot(
+                    existing.center[0] - new.center[0],
+                    existing.center[1] - new.center[1],
+                )
+                pairs.append((dist, i, j))
+
+        # Ordenar por distancia (emparejamiento greedy)
+        pairs.sort(key=lambda x: x[0])
+
+        assigned_existing: set[int] = set()
+        assigned_new: set[int] = set()
+        updated_hands: list[HandState] = []
+
+        for _dist, i, j in pairs:
+            if i in assigned_existing or j in assigned_new:
+                continue
+
+            # Actualizar mano existente con la nueva detección
+            updated_hands.append(
+                HandState(
+                    landmarks=new_hands[j].landmarks,
+                    confidence=new_hands[j].confidence,
+                    center=new_hands[j].center,
+                    size=new_hands[j].size,
+                    lost_frames=0,
+                )
+            )
+            assigned_existing.add(i)
+            assigned_new.add(j)
+
+        # Manos existentes no emparejadas: mantener temporalmente
+        for i, existing in enumerate(self._hands):
+            if i not in assigned_existing:
+                existing.lost_frames += 1
+                if existing.lost_frames <= self._config.hand_max_lost_frames:
+                    updated_hands.append(existing)
+
+        # Nuevas detecciones no emparejadas: añadir como manos nuevas
+        for j, new in enumerate(new_hands):
+            if j not in assigned_new:
+                updated_hands.append(new)
+
+        # Limitar a 2 manos y ordenar por posición x (izquierda -> derecha)
+        self._hands = sorted(updated_hands, key=lambda h: h.center[0])[:2]
+
+    def _handle_mode_transition(self) -> None:
         """Decide si se mantiene o cambia el modo de tracking usando histeresis.
 
-        Esto evita oscilaciones constantes entre wrists y hands cuando la
-        detección fluctúa frame a frame.
+        Usa la cantidad de manos activas (incluyendo las mantenidas por
+        predicción) para decidir el cambio de modo.
         """
-        detected_count = len(new_hands)
+        tracked_count = len(self._hands)
 
         # Actualizar contadores de histeresis
-        if detected_count == 2:
+        if tracked_count == 2:
             self._frames_with_two_hands += 1
             self._frames_without_two_hands = 0
         else:
@@ -157,12 +240,12 @@ class Tracker:
                     "Modo hands -> wrists: %d frames sin 2 manos",
                     self._config.mode_switch_to_wrists_threshold,
                 )
-            elif detected_count == 2:
+            elif tracked_count == 2:
                 self._state = "TRACKING"
 
         logger.debug(
-            "Manos detectadas: %d | modo=%s | estado=%s | hist=(%d, %d)",
-            detected_count,
+            "Manos activas: %d | modo=%s | estado=%s | hist=(%d, %d)",
+            tracked_count,
             self._tracking_mode,
             self._state,
             self._frames_with_two_hands,

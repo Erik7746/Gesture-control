@@ -49,19 +49,6 @@ def crop_roi(frame: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
     return frame[y1:y2, x1:x2].copy()
 
 
-def resize_for_model(image: np.ndarray, target_size: int) -> np.ndarray:
-    """Redimensiona una imagen a un tamaño cuadrado fijo.
-
-    Args:
-        image: Imagen de entrada.
-        target_size: Ancho y alto deseados (ej. 224).
-
-    Returns:
-        Imagen redimensionada.
-    """
-    return cv2.resize(image, (target_size, target_size), interpolation=cv2.INTER_LINEAR)
-
-
 def transform_normalized_landmarks(
     landmarks: list,
     roi: tuple[int, int, int, int],

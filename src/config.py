@@ -55,7 +55,7 @@ class Config:
     """Frames consecutivos con 2 manos detectadas para cambiar de wrists a hands."""
     mode_switch_to_wrists_threshold: int = 5
     """Frames consecutivos sin 2 manos detectadas para volver de hands a wrists."""
+    hand_max_lost_frames: int = 3
+    """Frames máximos que una mano se mantiene en tracking sin ser detectada."""
 
-    # Hand Landmarker input
-    hand_input_size: int = 224
-    """Tamaño de entrada esperado por Hand Landmarker (resize del ROI)."""
+

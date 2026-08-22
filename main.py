@@ -11,7 +11,7 @@ import numpy as np
 from src.config import Config
 from src.camera import Camera, CameraError
 from src.fps import FPSLimiter, FPSCounter
-from src.image_utils import bgr_to_rgb, create_mp_image, crop_roi, resize_for_model
+from src.image_utils import bgr_to_rgb, create_mp_image, crop_roi
 from src.tracker import Tracker
 from src.pose_detector import PoseDetector
 from src.hand_detector import HandDetector
@@ -107,10 +107,9 @@ def main() -> int:
                         roi = tracker.get_roi_for_hand_detection(frame.shape)
                         tracker.set_current_hand_roi(roi)
 
-                        # Crop + resize del ROI
+                        # Crop del ROI (sin resize forzado para preservar calidad)
                         roi_rgb = crop_roi(rgb_full, roi)
-                        roi_resized = resize_for_model(roi_rgb, config.hand_input_size)
-                        mp_image_roi = create_mp_image(roi_resized)
+                        mp_image_roi = create_mp_image(roi_rgb)
 
                         hand_detector.detect_async(mp_image_roi, timestamp_ms)
 
