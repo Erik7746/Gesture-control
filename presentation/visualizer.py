@@ -8,7 +8,7 @@ import numpy as np
 
 from mediapipe.tasks.python.vision import PoseLandmarkerResult, PoseLandmark
 
-from .tracker import HandState
+from core.types import HandState
 
 logger = logging.getLogger(__name__)
 
@@ -127,13 +127,11 @@ class Visualizer:
         if len(lm) < 21:
             return
 
-        # Puntos
         for i, (x, y, _z) in enumerate(lm):
             px, py = int(x), int(y)
             cv2.circle(frame, (px, py), 4, color, -1)
             cv2.circle(frame, (px, py), 4, (0, 0, 0), 1)
 
-        # Líneas
         for a, b in _HAND_CONNECTIONS:
             if a < len(lm) and b < len(lm):
                 pa = (int(lm[a][0]), int(lm[a][1]))

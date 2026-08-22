@@ -8,23 +8,15 @@ import time
 import cv2
 import numpy as np
 
-from src.config import Config
-from src.camera import Camera, CameraError
-from src.fps import FPSLimiter, FPSCounter
-from src.image_utils import bgr_to_rgb, create_mp_image, crop_roi
-from src.tracker import Tracker
-from src.pose_detector import PoseDetector
-from src.hand_detector import HandDetector
-from src.visualizer import Visualizer
-
-
-def setup_logging(level_name: str) -> None:
-    level = getattr(logging, level_name.upper(), logging.INFO)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+from config.settings import Config, CameraConfig, ModelConfig, ROIConfig, TrackingConfig
+from infrastructure.camera import Camera, CameraError
+from infrastructure.timing import FPSLimiter, FPSCounter
+from detection.image_pipeline import bgr_to_rgb, create_mp_image, crop_roi
+from core.state_machine import HandTrackingStateMachine
+from detection.pose_detector import PoseDetector
+from detection.hand_detector import HandDetector
+from presentation.visualizer import Visualizer
+from utils.logging_config import configure_logging
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,44 +34,57 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    setup_logging(args.log_level)
-    logger = logging.getLogger(__name__)
-
-    config = Config(
-        camera_index=args.camera,
-        frame_width=args.width,
-        frame_height=args.height,
-        target_fps=args.fps,
+def build_config(args: argparse.Namespace) -> Config:
+    return Config(
+        camera=CameraConfig(
+            index=args.camera,
+            frame_width=args.width,
+            frame_height=args.height,
+            target_fps=args.fps,
+        ),
+        models=ModelConfig(),
+        roi=ROIConfig(),
+        tracking=TrackingConfig(),
         log_level=args.log_level,
     )
 
+
+def main() -> int:
+    args = parse_args()
+    configure_logging(args.log_level)
+    logger = logging.getLogger(__name__)
+
+    config = build_config(args)
+
     logger.info(
         "Iniciando | cámara=%s res=%sx%s fps=%s",
-        config.camera_index,
-        config.frame_width,
-        config.frame_height,
-        config.target_fps,
+        config.camera.index,
+        config.camera.frame_width,
+        config.camera.frame_height,
+        config.camera.target_fps,
     )
 
-    fps_limiter = FPSLimiter(config.target_fps)
+    fps_limiter = FPSLimiter(config.camera.target_fps)
     fps_counter = FPSCounter()
     visualizer = Visualizer()
 
-    tracker = Tracker(config)
+    state_machine = HandTrackingStateMachine(
+        tracking_config=config.tracking,
+        roi_config=config.roi,
+        model_config=config.models,
+    )
 
-    # Callbacks: actualizan el tracker desde hilos internos de MediaPipe
+    # Callbacks: actualizan el state_machine desde hilos internos de MediaPipe
     def pose_callback(result, *cb_args):
-        tracker.on_pose_result(result)
+        state_machine.on_pose_result(result)
 
     def hand_callback(result, *cb_args):
-        tracker.on_hand_result(result)
+        state_machine.on_hand_result(result)
 
     try:
-        with Camera(config) as camera:
-            with PoseDetector(config, pose_callback) as pose_detector:
-                with HandDetector(config, hand_callback) as hand_detector:
+        with Camera(config.camera) as camera:
+            with PoseDetector(config.models, pose_callback) as pose_detector:
+                with HandDetector(config.models, hand_callback) as hand_detector:
                     # Timestamp base para monotonicidad
                     start_time_ns = time.time_ns()
 
@@ -87,7 +92,7 @@ def main() -> int:
                         fps_limiter.wait()
 
                         frame = camera.read()
-                        if config.mirror:
+                        if config.camera.mirror:
                             frame = cv2.flip(frame, 1)
 
                         # Preparar imagen RGB para MediaPipe
@@ -100,12 +105,12 @@ def main() -> int:
                             timestamp_ms = 1
 
                         # ── Pose detection (asíncrono, opcional) ─────────────
-                        if tracker.should_run_pose_detection():
+                        if state_machine.should_run_pose_detection():
                             pose_detector.detect_async(mp_image_full, timestamp_ms)
 
                         # ── Hand detection sobre ROI ─────────────────────────
-                        roi = tracker.get_roi_for_hand_detection(frame.shape)
-                        tracker.set_current_hand_roi(roi)
+                        roi = state_machine.get_roi_for_hand_detection(frame.shape)
+                        state_machine.set_current_hand_roi(roi)
 
                         # Crop del ROI (sin resize forzado para preservar calidad)
                         roi_rgb = crop_roi(rgb_full, roi)
@@ -119,11 +124,11 @@ def main() -> int:
 
                         display = visualizer.draw(
                             frame=frame.copy(),
-                            hands=tracker.hands,
-                            pose_result=tracker.pose_result,
+                            hands=state_machine.hands,
+                            pose_result=state_machine.pose_result,
                             roi=roi,
-                            tracker_state=tracker.state,
-                            tracking_mode=tracker.tracking_mode,
+                            tracker_state=state_machine.state.name,
+                            tracking_mode=state_machine.tracking_mode.name,
                             fps=real_fps,
                         )
 

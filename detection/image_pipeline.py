@@ -49,21 +49,16 @@ def crop_roi(frame: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
     return frame[y1:y2, x1:x2].copy()
 
 
-def transform_normalized_landmarks(
+def denormalize_landmarks_to_roi(
     landmarks: list,
     roi: tuple[int, int, int, int],
 ) -> list[tuple[float, float, float]]:
     """Convierte landmarks normalizados [0,1] del ROI a coordenadas del frame original.
 
-    MediaPipe HandLandmarker devuelve coordenadas normalizadas respecto a la imagen
-    de entrada. Si la imagen de entrada es un ROI redimensionado, las coordenadas
-    normalizadas se interpretan directamente sobre las dimensiones *originales* del
-    ROI antes del resize, porque la normalización es lineal.
-
     Fórmula:
         x_original = roi_x1 + landmark.x * roi_width
         y_original = roi_y1 + landmark.y * roi_height
-        z se mantiene (es relativo a la profundidad de la mano, no al frame).
+        z se escala proporcionalmente al tamaño del ROI.
 
     Args:
         landmarks: Lista de objetos NormalizedLandmark.
@@ -81,7 +76,7 @@ def transform_normalized_landmarks(
             (
                 x1 + lm.x * roi_w,
                 y1 + lm.y * roi_h,
-                lm.z * max(roi_w, roi_h),  # escalar z proporcionalmente al ROI
+                lm.z * max(roi_w, roi_h),
             )
         )
     return out

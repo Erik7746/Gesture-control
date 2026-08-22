@@ -7,7 +7,7 @@ from mediapipe.tasks.python.core.base_options import BaseOptions
 from mediapipe.tasks.python.vision import PoseLandmarker, PoseLandmarkerOptions, RunningMode
 from mediapipe.tasks.python.vision.core.image import Image as MPImage
 
-from .config import Config
+from config.settings import ModelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class PoseDetector:
     El resultado llega de forma asíncrona al callback configurado.
     """
 
-    def __init__(self, config: Config, result_callback: Callable) -> None:
+    def __init__(self, config: ModelConfig, result_callback: Callable) -> None:
         self._config = config
         self._landmarker: PoseLandmarker | None = None
 
@@ -55,7 +55,7 @@ class PoseDetector:
             self._landmarker = None
             logger.info("PoseLandmarker cerrado.")
 
-    def __enter__(self) -> "PoseDetector":
+    def __enter__(self) -> PoseDetector:
         return self
 
     def __exit__(self, *_exc: object) -> None:

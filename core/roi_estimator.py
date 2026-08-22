@@ -7,7 +7,7 @@ import numpy as np
 
 from mediapipe.tasks.python.vision import PoseLandmarkerResult, PoseLandmark
 
-from .config import Config
+from config.settings import ModelConfig, ROIConfig
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +60,9 @@ def _landmark_to_pixel(
 class ROIEstimator:
     """Genera regiones de interés candidatas para las manos."""
 
-    def __init__(self, config: Config) -> None:
-        self._config = config
+    def __init__(self, model_config: ModelConfig, roi_config: ROIConfig) -> None:
+        self._model_config = model_config
+        self._roi_config = roi_config
 
     def from_pose(
         self, result: PoseLandmarkerResult, frame_shape: tuple[int, int]
@@ -76,7 +77,7 @@ class ROIEstimator:
 
         person_idx = _best_person(result)
         conf = _person_confidence(result, person_idx)
-        if conf < self._config.min_pose_presence_confidence:
+        if conf < self._model_config.min_pose_presence_confidence:
             logger.debug("Confianza de pose insuficiente: %.2f", conf)
             return None
 
@@ -85,10 +86,10 @@ class ROIEstimator:
         wrist_l = _get_landmark(result, person_idx, WRIST_L)
         wrist_r = _get_landmark(result, person_idx, WRIST_R)
 
-        if wrist_l.visibility is None or wrist_l.visibility < self._config.min_pose_presence_confidence:
+        if wrist_l.visibility is None or wrist_l.visibility < self._model_config.min_pose_presence_confidence:
             logger.debug("Muñeca izquierda no visible")
             return None
-        if wrist_r.visibility is None or wrist_r.visibility < self._config.min_pose_presence_confidence:
+        if wrist_r.visibility is None or wrist_r.visibility < self._model_config.min_pose_presence_confidence:
             logger.debug("Muñeca derecha no visible")
             return None
 
@@ -105,8 +106,8 @@ class ROIEstimator:
         height = max(y2 - y1, 1.0)
 
         # Margen configurable alrededor de las muñecas
-        margin_x = max(width * self._config.roi_wrist_margin_x, self._config.roi_wrist_min_size / 2)
-        margin_y = max(height * self._config.roi_wrist_margin_y, self._config.roi_wrist_min_size / 2)
+        margin_x = max(width * self._roi_config.wrist_margin_x, self._roi_config.wrist_min_size / 2)
+        margin_y = max(height * self._roi_config.wrist_margin_y, self._roi_config.wrist_min_size / 2)
 
         x1 -= margin_x
         y1 -= margin_y
@@ -120,12 +121,12 @@ class ROIEstimator:
         y2 = min(frame_h, int(y2))
 
         # Asegurar tamaño mínimo después de clamp
-        if x2 - x1 < self._config.roi_wrist_min_size:
-            x2 = min(frame_w, x1 + self._config.roi_wrist_min_size)
-            x1 = max(0, x2 - self._config.roi_wrist_min_size)
-        if y2 - y1 < self._config.roi_wrist_min_size:
-            y2 = min(frame_h, y1 + self._config.roi_wrist_min_size)
-            y1 = max(0, y2 - self._config.roi_wrist_min_size)
+        if x2 - x1 < self._roi_config.wrist_min_size:
+            x2 = min(frame_w, x1 + self._roi_config.wrist_min_size)
+            x1 = max(0, x2 - self._roi_config.wrist_min_size)
+        if y2 - y1 < self._roi_config.wrist_min_size:
+            y2 = min(frame_h, y1 + self._roi_config.wrist_min_size)
+            y1 = max(0, y2 - self._roi_config.wrist_min_size)
 
         return (x1, y1, x2, y2)
 
@@ -139,16 +140,16 @@ class ROIEstimator:
 
         Args:
             hand_center: (x, y) en píxeles del frame original.
-            hand_size: Tamaño estimado de la mano en píxeles (ej. bounding box aproximado).
+            hand_size: Tamaño estimado de la mano en píxeles.
             frame_shape: (h, w) del frame.
 
         Returns:
             ROI cuadrado.
         """
         frame_h, frame_w = frame_shape[:2]
-        roi_size = int(hand_size * self._config.roi_size_factor)
-        roi_size = max(roi_size, self._config.roi_min_size)
-        max_size = int(min(frame_w, frame_h) * self._config.roi_max_size_ratio)
+        roi_size = int(hand_size * self._roi_config.size_factor)
+        roi_size = max(roi_size, self._roi_config.min_size)
+        max_size = int(min(frame_w, frame_h) * self._roi_config.max_size_ratio)
         roi_size = min(roi_size, max_size)
 
         x1 = int(hand_center[0] - roi_size / 2)

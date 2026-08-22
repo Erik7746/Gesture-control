@@ -8,36 +8,33 @@ import cv2
 
 from mediapipe.tasks.python.vision import HandLandmarkerResult
 
-from src.config import Config
-from src.camera import Camera, CameraError
-from src.fps import FPSLimiter, FPSCounter
-from src.image_utils import bgr_to_rgb, create_mp_image
-from src.hand_detector import HandDetector
-from src.tracker import HandState
-from src.visualizer import Visualizer
-
-
-def setup_logging(level_name: str) -> None:
-    level = getattr(logging, level_name.upper(), logging.INFO)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+from config.settings import Config, CameraConfig, ModelConfig, ROIConfig, TrackingConfig
+from infrastructure.camera import Camera, CameraError
+from infrastructure.timing import FPSLimiter, FPSCounter
+from detection.image_pipeline import bgr_to_rgb, create_mp_image
+from detection.hand_detector import HandDetector
+from core.types import HandState
+from presentation.visualizer import Visualizer
+from utils.logging_config import configure_logging
 
 
 def main() -> int:
-    setup_logging("INFO")
+    configure_logging("INFO")
     logger = logging.getLogger(__name__)
 
-    config = Config(camera_index=0)
-    fps_limiter = FPSLimiter(config.target_fps)
+    config = Config(
+        camera=CameraConfig(),
+        models=ModelConfig(),
+        roi=ROIConfig(),
+        tracking=TrackingConfig(),
+    )
+    fps_limiter = FPSLimiter(config.camera.target_fps)
     fps_counter = FPSCounter()
     visualizer = Visualizer()
 
     # Estado compartido entre callback y bucle principal
     hands: list[HandState] = []
-    frame_shape = (config.frame_height, config.frame_width, 3)
+    frame_shape = (config.camera.frame_height, config.camera.frame_width, 3)
 
     def hand_callback(result: HandLandmarkerResult, *args) -> None:
         """Callback que recibe landmarks normalizados [0,1] del frame completo."""
@@ -54,7 +51,6 @@ def main() -> int:
             if result.handedness and idx < len(result.handedness):
                 score = result.handedness[idx][0].score
 
-            # Frame completo: coordenadas normalizadas se convierten directamente a píxeles
             landmarks = [
                 (lm.x * w, lm.y * h, lm.z * max(w, h))
                 for lm in lm_norm
@@ -75,8 +71,8 @@ def main() -> int:
             )
 
     try:
-        with Camera(config) as camera:
-            with HandDetector(config, hand_callback) as hand_detector:
+        with Camera(config.camera) as camera:
+            with HandDetector(config.models, hand_callback) as hand_detector:
                 start_time_ns = time.time_ns()
                 logger.info("Test full-frame iniciado | num_hands=2 | sin pose | sin ROI")
 
@@ -84,12 +80,11 @@ def main() -> int:
                     fps_limiter.wait()
 
                     frame = camera.read()
-                    if config.mirror:
+                    if config.camera.mirror:
                         frame = cv2.flip(frame, 1)
 
                     frame_shape = frame.shape
 
-                    # Frame completo RGB -> MediaPipe Image
                     rgb_full = bgr_to_rgb(frame)
                     mp_image_full = create_mp_image(rgb_full)
 
@@ -97,7 +92,6 @@ def main() -> int:
                     if timestamp_ms <= 0:
                         timestamp_ms = 1
 
-                    # Pasar frame completo directamente al detector
                     hand_detector.detect_async(mp_image_full, timestamp_ms)
 
                     fps_counter.tick()

@@ -3,38 +3,28 @@ from __future__ import annotations
 import logging
 import math
 import threading
-from dataclasses import dataclass
 from typing import Optional
 
 from mediapipe.tasks.python.vision import PoseLandmarkerResult, HandLandmarkerResult
 
-from .config import Config
-from .roi_estimator import ROIEstimator
+from config.settings import TrackingConfig, ROIConfig, ModelConfig
+from core.types import HandState, TrackingState, TrackingMode
+from core.roi_estimator import ROIEstimator
+from detection.image_pipeline import denormalize_landmarks_to_roi
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class HandState:
-    """Estado interno de una mano trackeada."""
-
-    landmarks: list[tuple[float, float, float]]  # 21 landmarks en coords originales
-    confidence: float
-    center: tuple[float, float]  # centro aproximado en píxeles
-    size: float  # tamaño estimado en píxeles
-    lost_frames: int = 0  # frames desde la última detección real
-
-
-class Tracker:
+class HandTrackingStateMachine:
     """Máquina de estados para seguimiento de hasta 2 manos.
 
     Funciona en dos modos:
-    - wrists: ROI generado a partir de las muñecas detectadas por pose.
-    - hands: ROI generado a partir de las 2 manos trackeadas.
+    - WRISTS: ROI generado a partir de las muñecas detectadas por pose.
+    - HANDS: ROI generado a partir de las 2 manos trackeadas.
 
-    El modo wrists es el puente para encontrar las manos a distancia.
-    Solo se pasa a hands cuando se detectan 2 manos; si se pierde alguna,
-    se vuelve inmediatamente a wrists.
+    El modo WRISTS es el puente para encontrar las manos a distancia.
+    Solo se pasa a HANDS cuando se detectan 2 manos; si se pierde alguna,
+    se vuelve inmediatamente a WRISTS.
 
     Incluye un mini-tracker por proximidad: si una mano no se detecta en
     un frame, se mantiene en su última posición conocida hasta
@@ -45,14 +35,21 @@ class Tracker:
     a través de métodos que adquieren un lock.
     """
 
-    def __init__(self, config: Config) -> None:
-        self._config = config
-        self._roi_estimator = ROIEstimator(config)
+    def __init__(
+        self,
+        tracking_config: TrackingConfig,
+        roi_config: ROIConfig,
+        model_config: ModelConfig,
+    ) -> None:
+        self._tracking_config = tracking_config
+        self._roi_config = roi_config
+        self._model_config = model_config
+        self._roi_estimator = ROIEstimator(model_config, roi_config)
         self._lock = threading.Lock()
 
         # Estado
-        self._state = "DETECTING"  # DETECTING | TRACKING | LOST
-        self._tracking_mode = "wrists"  # wrists | hands
+        self._state = TrackingState.DETECTING
+        self._tracking_mode = TrackingMode.WRISTS
         self._pose_result: Optional[PoseLandmarkerResult] = None
         self._hands: list[HandState] = []
 
@@ -92,25 +89,21 @@ class Tracker:
             roi = self._current_hand_roi
             if not result.hand_landmarks:
                 self._frames_without_any_hand += 1
-                # Incrementar edad de manos existentes
                 self._age_hands()
                 logger.debug("HandLandmarker no encontró manos en ROI %s", roi)
                 self._handle_mode_transition()
                 return
 
             self._frames_without_any_hand = 0
-            from .image_utils import transform_normalized_landmarks
 
             # Convertir detecciones del frame actual a HandState
             new_hands: list[HandState] = []
             for idx, lm_norm in enumerate(result.hand_landmarks[:2]):  # máximo 2 manos
-                # Tomar la mayor confianza disponible entre las categorías de handedness
                 score = 0.0
                 if result.handedness and idx < len(result.handedness):
                     score = result.handedness[idx][0].score
 
-                # Transformar a coords originales
-                lm_orig = transform_normalized_landmarks(lm_norm, roi)
+                lm_orig = denormalize_landmarks_to_roi(lm_norm, roi)
                 xs = [p[0] for p in lm_orig]
                 ys = [p[1] for p in lm_orig]
                 center = (sum(xs) / len(xs), sum(ys) / len(ys))
@@ -126,7 +119,6 @@ class Tracker:
                     )
                 )
 
-            # Emparejar nuevas detecciones con manos existentes por proximidad
             self._merge_hands(new_hands)
             self._handle_mode_transition()
 
@@ -136,7 +128,7 @@ class Tracker:
             hand.lost_frames += 1
         self._hands = [
             hand for hand in self._hands
-            if hand.lost_frames <= self._config.hand_max_lost_frames
+            if hand.lost_frames <= self._tracking_config.hand_max_lost_frames
         ]
 
     def _merge_hands(self, new_hands: list[HandState]) -> None:
@@ -175,7 +167,6 @@ class Tracker:
             if i in assigned_existing or j in assigned_new:
                 continue
 
-            # Actualizar mano existente con la nueva detección
             updated_hands.append(
                 HandState(
                     landmarks=new_hands[j].landmarks,
@@ -192,7 +183,7 @@ class Tracker:
         for i, existing in enumerate(self._hands):
             if i not in assigned_existing:
                 existing.lost_frames += 1
-                if existing.lost_frames <= self._config.hand_max_lost_frames:
+                if existing.lost_frames <= self._tracking_config.hand_max_lost_frames:
                     updated_hands.append(existing)
 
         # Nuevas detecciones no emparejadas: añadir como manos nuevas
@@ -204,14 +195,9 @@ class Tracker:
         self._hands = sorted(updated_hands, key=lambda h: h.center[0])[:2]
 
     def _handle_mode_transition(self) -> None:
-        """Decide si se mantiene o cambia el modo de tracking usando histeresis.
-
-        Usa la cantidad de manos activas (incluyendo las mantenidas por
-        predicción) para decidir el cambio de modo.
-        """
+        """Decide si se mantiene o cambia el modo de tracking usando histeresis."""
         tracked_count = len(self._hands)
 
-        # Actualizar contadores de histeresis
         if tracked_count == 2:
             self._frames_with_two_hands += 1
             self._frames_without_two_hands = 0
@@ -219,35 +205,34 @@ class Tracker:
             self._frames_without_two_hands += 1
             self._frames_with_two_hands = 0
 
-        if self._tracking_mode == "wrists":
-            if self._frames_with_two_hands >= self._config.mode_switch_to_hands_threshold:
-                self._tracking_mode = "hands"
-                self._state = "TRACKING"
+        if self._tracking_mode == TrackingMode.WRISTS:
+            if self._frames_with_two_hands >= self._tracking_config.mode_switch_to_hands_threshold:
+                self._tracking_mode = TrackingMode.HANDS
+                self._state = TrackingState.TRACKING
                 self._frames_with_two_hands = 0
                 logger.info(
-                    "Modo wrists -> hands: %d frames con 2 manos",
-                    self._config.mode_switch_to_hands_threshold,
+                    "Modo WRISTS -> HANDS: %d frames con 2 manos",
+                    self._tracking_config.mode_switch_to_hands_threshold,
                 )
-        else:  # hands
-            if self._frames_without_two_hands >= self._config.mode_switch_to_wrists_threshold:
-                self._tracking_mode = "wrists"
-                self._state = "DETECTING"
+        else:  # HANDS
+            if self._frames_without_two_hands >= self._tracking_config.mode_switch_to_wrists_threshold:
+                self._tracking_mode = TrackingMode.WRISTS
+                self._state = TrackingState.DETECTING
                 self._hands = []
                 self._frames_without_two_hands = 0
-                # Forzar pose detection inmediato al volver a wrists
-                self._frames_since_pose_recalibration = self._config.pose_recalibration_interval
+                self._frames_since_pose_recalibration = self._tracking_config.pose_recalibration_interval
                 logger.info(
-                    "Modo hands -> wrists: %d frames sin 2 manos",
-                    self._config.mode_switch_to_wrists_threshold,
+                    "Modo HANDS -> WRISTS: %d frames sin 2 manos",
+                    self._tracking_config.mode_switch_to_wrists_threshold,
                 )
             elif tracked_count == 2:
-                self._state = "TRACKING"
+                self._state = TrackingState.TRACKING
 
         logger.debug(
             "Manos activas: %d | modo=%s | estado=%s | hist=(%d, %d)",
             tracked_count,
-            self._tracking_mode,
-            self._state,
+            self._tracking_mode.name,
+            self._state.name,
             self._frames_with_two_hands,
             self._frames_without_two_hands,
         )
@@ -260,16 +245,16 @@ class Tracker:
             self._frame_counter += 1
 
             # Verificar pérdida de tracking global
-            if self._frames_without_any_hand >= self._config.hand_lost_threshold:
-                if self._state == "TRACKING":
+            if self._frames_without_any_hand >= self._tracking_config.hand_lost_threshold:
+                if self._state == TrackingState.TRACKING:
                     logger.info("Tracking perdido: %d frames sin ninguna mano", self._frames_without_any_hand)
-                    self._state = "LOST"
-                    self._tracking_mode = "wrists"
+                    self._state = TrackingState.LOST
+                    self._tracking_mode = TrackingMode.WRISTS
                     self._hands = []
-                    self._frames_since_pose_recalibration = self._config.pose_recalibration_interval
+                    self._frames_since_pose_recalibration = self._tracking_config.pose_recalibration_interval
 
-            # Modo hands: ROI unificado a partir de las 2 manos trackeadas
-            if self._tracking_mode == "hands" and len(self._hands) == 2:
+            # Modo HANDS: ROI unificado a partir de las 2 manos trackeadas
+            if self._tracking_mode == TrackingMode.HANDS and len(self._hands) == 2:
                 rois = [
                     self._roi_estimator.from_hand_position(hand.center, hand.size, frame_shape)
                     for hand in self._hands
@@ -278,12 +263,12 @@ class Tracker:
                 u_w = unified[2] - unified[0]
                 u_h = unified[3] - unified[1]
                 f_h, f_w = frame_shape[:2]
-                if u_w >= f_w * self._config.roi_unify_max_ratio and u_h >= f_h * self._config.roi_unify_max_ratio:
+                if u_w >= f_w * self._roi_config.unify_max_ratio and u_h >= f_h * self._roi_config.unify_max_ratio:
                     return self._roi_estimator.full_frame(frame_shape)
                 return unified
 
-            # Modo wrists / DETECTING / LOST: ROI a partir de las muñecas de pose
-            if self._pose_result is not None and self._frames_without_pose < self._config.pose_lost_threshold:
+            # Modo WRISTS / DETECTING / LOST: ROI a partir de las muñecas de pose
+            if self._pose_result is not None and self._frames_without_pose < self._tracking_config.pose_lost_threshold:
                 wrist_roi = self._roi_estimator.from_pose(self._pose_result, frame_shape)
                 if wrist_roi is not None:
                     return wrist_roi
@@ -294,24 +279,22 @@ class Tracker:
     def should_run_pose_detection(self) -> bool:
         """Indica si en este frame conviene enviar un frame a PoseLandmarker."""
         with self._lock:
-            # En modo wrists siempre necesitamos pose fresca
-            if self._tracking_mode == "wrists":
+            if self._tracking_mode == TrackingMode.WRISTS:
                 return True
 
-            # En modo hands, usar el intervalo configurado
-            if self._frames_since_pose_recalibration >= self._config.pose_recalibration_interval:
+            if self._frames_since_pose_recalibration >= self._tracking_config.pose_recalibration_interval:
                 self._frames_since_pose_recalibration = 0
                 return True
             self._frames_since_pose_recalibration += 1
             return False
 
     @property
-    def state(self) -> str:
+    def state(self) -> TrackingState:
         with self._lock:
             return self._state
 
     @property
-    def tracking_mode(self) -> str:
+    def tracking_mode(self) -> TrackingMode:
         with self._lock:
             return self._tracking_mode
 

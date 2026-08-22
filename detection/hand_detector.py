@@ -7,7 +7,7 @@ from mediapipe.tasks.python.core.base_options import BaseOptions
 from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
 from mediapipe.tasks.python.vision.core.image import Image as MPImage
 
-from .config import Config
+from config.settings import ModelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class HandDetector:
     El resultado llega de forma asíncrona al callback configurado.
     """
 
-    def __init__(self, config: Config, result_callback: Callable) -> None:
+    def __init__(self, config: ModelConfig, result_callback: Callable) -> None:
         self._config = config
         self._landmarker: HandLandmarker | None = None
 
@@ -26,7 +26,7 @@ class HandDetector:
         options = HandLandmarkerOptions(
             base_options=base_options,
             running_mode=RunningMode.LIVE_STREAM,
-            num_hands=2,  # detectar ambas; el tracker elegirá la relevante
+            num_hands=2,
             min_hand_detection_confidence=config.min_hand_detection_confidence,
             min_hand_presence_confidence=config.min_hand_presence_confidence,
             min_tracking_confidence=config.min_hand_tracking_confidence,
@@ -55,7 +55,7 @@ class HandDetector:
             self._landmarker = None
             logger.info("HandLandmarker cerrado.")
 
-    def __enter__(self) -> "HandDetector":
+    def __enter__(self) -> HandDetector:
         return self
 
     def __exit__(self, *_exc: object) -> None:

@@ -1,23 +1,27 @@
 from __future__ import annotations
 
-import cv2 
+import cv2
 import numpy as np
 
-from .config import Config
+from config.settings import CameraConfig
+
 
 class CameraError(RuntimeError):
     """La cámara no se pudo abrir o falló durante la captura."""
 
+
 class Camera:
-    def __init__(self, config: Config) -> None:
+    """Wrapper de cv2.VideoCapture con configuración inicial."""
+
+    def __init__(self, config: CameraConfig) -> None:
         self._config = config
         self._cap: cv2.VideoCapture | None = None
-    
+
     def open(self) -> None:
-        cap = cv2.VideoCapture(self._config.camera_index)
+        cap = cv2.VideoCapture(self._config.index)
         if not cap.isOpened():
             cap.release()
-            raise CameraError(f"No se pudo abrir la camara {self._config.camera_index}")
+            raise CameraError(f"No se pudo abrir la camara {self._config.index}")
 
         # Forzar MJPEG para maximizar FPS en webcams integradas
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -40,7 +44,7 @@ class Camera:
             self._cap.release()
             self._cap = None
 
-    def __enter__(self) -> "Camera":
+    def __enter__(self) -> Camera:
         self.open()
         return self
 
